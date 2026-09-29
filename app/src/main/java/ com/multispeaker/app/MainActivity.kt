@@ -6,12 +6,25 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -42,7 +55,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         btManager = BluetoothManager(applicationContext)
-
         setContent {
             MultiSpeakerScreen(
                 btManager = btManager,
@@ -85,7 +97,6 @@ fun MultiSpeakerScreen(
                 .fillMaxSize()
                 .padding(20.dp)
         ) {
-            // ===== HEADER =====
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -128,7 +139,6 @@ fun MultiSpeakerScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // ===== SCAN BUTTON =====
             Button(
                 onClick = {
                     if (btManager.hasPermissions()) {
@@ -153,7 +163,6 @@ fun MultiSpeakerScreen(
                 )
             }
 
-            // ===== STATUS MESSAGE =====
             if (status.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(
@@ -166,7 +175,6 @@ fun MultiSpeakerScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // ===== DEVICE LIST =====
             if (devices.isEmpty()) {
                 Box(
                     modifier = Modifier
@@ -256,10 +264,21 @@ fun DeviceCard(
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    val (tagText, tagColor) = when (device.type) {
-                        DeviceType.LE_AUDIO -> "LE Audio" to Color(0xFF10B981)
-                        DeviceType.A2DP_CLASSIC -> "A2DP" to Color(0xFF22D3EE)
-                        DeviceType.UNKNOWN -> "Unknown" to Color(0xFF8B94A8)
+                    val tagText: String
+                    val tagColor: Color
+                    when (device.type) {
+                        DeviceType.LE_AUDIO -> {
+                            tagText = "LE Audio"
+                            tagColor = Color(0xFF10B981)
+                        }
+                        DeviceType.A2DP_CLASSIC -> {
+                            tagText = "A2DP"
+                            tagColor = Color(0xFF22D3EE)
+                        }
+                        DeviceType.UNKNOWN -> {
+                            tagText = "Unknown"
+                            tagColor = Color(0xFF8B94A8)
+                        }
                     }
                     Tag(text = tagText, color = tagColor)
 
@@ -273,51 +292,6 @@ fun DeviceCard(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
-            ) {
-                if (isConnected) {
-                    Button(
-                        onClick = onDisconnect,
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0x33EF4444)
-                        )
-                    ) {
-                        Text("Disconnect", color = Color(0xFFEF4444), fontSize = 12.sp)
-                    }
-                } else {
-                    Button(
-                        onClick = onConnect,
-                        enabled = !isConnecting,
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF22D3EE)
-                        )
-                    ) {
-                        Text(
-                            text = if (isConnecting) "Connecting..." else "Connect",
-                            color = Color(0xFF05070F),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun Tag(text: String, color: Color) {
-    Box(
-        modifier = Modifier
-            .background(color = color.copy(alpha = 0.15f), shape = RoundedCornerShape(6.dp))
-            .border(width = 1.dp, color = color.copy(alpha = 0.4f), shape = RoundedCornerShape(6.dp))
-            .padding(horizontal = 8.dp, vertical = 3.dp)
-    ) {
-        Text(text = text, fontSize = 10.sp, color = color, fontWeight = FontWeight.SemiBold)
-    }
-}   modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End
             ) {
                 if (isConnected) {
