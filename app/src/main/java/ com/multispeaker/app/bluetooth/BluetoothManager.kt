@@ -114,11 +114,12 @@ class BluetoothManager(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     fun startScan() {
-        val adapter = adapter ?: run {
+        val localAdapter = adapter
+        if (localAdapter == null) {
             _statusMessage.value = "Bluetooth not available on this device"
             return
         }
-        if (!adapter.isEnabled) {
+        if (!localAdapter.isEnabled) {
             _statusMessage.value = "Please turn ON Bluetooth"
             return
         }
@@ -129,18 +130,17 @@ class BluetoothManager(private val context: Context) {
         if (_isScanning.value) return
 
         val bonded: Set<BluetoothDevice> = try {
-            adapter.bondedDevices ?: emptySet()
+            localAdapter.bondedDevices ?: emptySet()
         } catch (_: SecurityException) {
             emptySet()
         }
-        val initialList = bonded.map { it.toDeviceModel(true) }.toMutableList()
-        _devices.value = initialList
+        _devices.value = bonded.map { it.toDeviceModel(true) }
 
         _isScanning.value = true
         _statusMessage.value = "Scanning for devices..."
 
         val scanner = try {
-            adapter.bluetoothLeScanner
+            localAdapter.bluetoothLeScanner
         } catch (_: SecurityException) {
             null
         }
@@ -162,7 +162,7 @@ class BluetoothManager(private val context: Context) {
                     )
                     classicReceiverRegistered = true
                 }
-                adapter.startDiscovery()
+                localAdapter.startDiscovery()
             } catch (_: SecurityException) { }
         }
 
@@ -171,15 +171,15 @@ class BluetoothManager(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     fun stopScan() {
-        val adapter = adapter ?: return
+        val localAdapter = adapter ?: return
         if (!_isScanning.value) return
 
         try {
-            adapter.bluetoothLeScanner?.stopScan(leScanCallback)
+            localAdapter.bluetoothLeScanner?.stopScan(leScanCallback)
         } catch (_: SecurityException) { }
 
         try {
-            adapter.cancelDiscovery()
+            localAdapter.cancelDiscovery()
         } catch (_: SecurityException) { }
 
         if (classicReceiverRegistered) {
@@ -237,7 +237,6 @@ class BluetoothManager(private val context: Context) {
         } ?: return
 
         val address = device.address ?: return
-
         val existing = _devices.value.firstOrNull { it.address == address }
         val type = detectDeviceType(device, scanRecord)
 
@@ -260,14 +259,14 @@ class BluetoothManager(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     private fun BluetoothDevice.toDeviceModel(bonded: Boolean): DeviceModel {
-        val name = try {
+        val deviceName = try {
             this.name
         } catch (_: SecurityException) {
             null
         } ?: "Unknown Device"
 
         return DeviceModel(
-            name = name,
+            name = deviceName,
             address = this.address ?: "",
             type = detectDeviceType(this, null),
             rssi = 0,
@@ -329,155 +328,10 @@ class BluetoothManager(private val context: Context) {
     }
 
     private fun updateDeviceState(address: String, state: ConnectionState) {
-        _devices.value = _devices.value.map {
-            if (it.address == address) it.copy(connectionState = state) else it
+        _devices.value = _devices.value.map { d ->
+            if (d.address == address) d.copy(connectionState = state) else d
         }
     }
-
-    fun getConnectedCount(): Int = _devices.value.count {
-        it.connectionState == ConnectionState.CONNECTED
-    }
-
-    fun clearStatus() {
-        _statusMessage.value = ""
-    }
-
-    fun cleanup() {
-        stopScan()
-    }
-}eviceType(this, null),
-            rssi = 0,
-            isBonded = bonded,
-            connectionState = ConnectionState.DISCONNECTED,
-            rawDevice = this
-        )
-    }
-
-    // ============================================================
-    // CONNECT / DISCONNECT
-    // ============================================================
-    @SuppressLint("MissingPermission")
-    fun connectDevice(model: DeviceModel): Boolean {
-        val connectedCount = _devices.value.count {
-            it.connectionState == ConnectionState.CONNECTED
-        }
-        if (connectedCount >= MAX_DEVICES) {
-            _statusMessage.value =
-                "Maximum $MAX_DEVICES devices allowed. Disconnect one first."
-            return false
-        }
-
-        val device = model.rawDevice
-        if (device == null) {
-            _statusMessage.value = "Device reference not available"
-            return false
-        }
-
-        updateDeviceState(model.address, ConnectionState.CONNECTING)
-        _statusMessage.value = "Connecting to ${model.name}..."
-
-        return try {
-            if (device.bondState != BluetoothDevice.BOND_BONDED) {
-                // Initiate pairing. On Android 12+ this may show system dialog.
-                val started = device.createBond()
-                if (started) {
-                    _statusMessage.value =
-                        "Pairing with ${model.name}. Confirm on both devices."
-                } else {
-                    // Some devices are already paired at OS level but not via this API
-                    updateDeviceState(model.address, ConnectionState.CONNECTED)
-                    _statusMessage.value = "${model.name} is ready"
-                }
-            } else {
-                updateDeviceState(model.address, ConnectionState.CONNECTED)
-                _statusMessage.value = "Connected to ${model.name}"
-            }
-            true
-        } catch (e: SecurityException) {
-            updateDeviceState(model.address, ConnectionState.FAILED)
-            _statusMessage.value = "Permission denied: ${e.message}"
-            false
-        } catch (e: Exception) {
-            updateDeviceState(model.address, ConnectionState.FAILED)
-            _statusMessage.value = "Failed: ${e.message}"
-            false
-        }
-    }
-
-    fun disconnectDevice(model: DeviceModel) {
-        updateDeviceState(model.address, ConnectionState.DISCONNECTED)
-        _statusMessage.value = "Disconnected from ${model.name}"
-    }
-
-    private fun updateDeviceState(address: String, state: ConnectionState) {
-        _devices.value = _devices.value.map {
-            if (it.address == address) it.copy(connectionState = state) else it
-        }
-    }
-
-    // ============================================================
-    // HELPERS
-    // ============================================================
-    fun getConnectedCount(): Int = _devices.value.count {
-        it.connectionState == ConnectionState.CONNECTED
-    }
-
-    fun clearStatus() {
-        _statusMessage.value = ""
-    }
-
-    fun cleanup() {
-        stopScan()
-    }
-}      }
-            }
-            return true
-        } catch (e: Exception) {
-            updateDeviceState(model.address, ConnectionState.FAILED)
-            _statusMessage.value = "Failed: ${e.message}"
-            return false
-        }
-    }
-
-    fun disconnectDevice(model: DeviceModel) {
-        val device = model.rawDevice ?: return
-        try {
-            disconnectA2dp(device)
-        } catch (_: Exception) { }
-        updateDeviceState(model.address, ConnectionState.DISCONNECTED)
-        _statusMessage.value = "Disconnected from ${model.name}"
-    }
-
-    private fun updateDeviceState(address: String, state: ConnectionState) {
-        _devices.value = _devices.value.map {
-            if (it.address == address) it.copy(connectionState = state) else it
-        }
-    }
-
-    // ============ A2DP via reflection ============
-    @SuppressLint("MissingPermission")
-    private fun connectA2dp(device: BluetoothDevice): Boolean {
-        return try {
-            val adapter = adapter ?: return false
-            val m = adapter.javaClass.getMethod("getProfileProxy", Context::class.java, BluetoothProfile::class.java, Int::class.javaPrimitiveType)
-            // Reflection path is device-dependent; fall back gracefully
-            false
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private fun disconnectA2dp(device: BluetoothDevice): Boolean {
-        return try {
-            false
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    fun getConnectedCount(): Int = _devices.value.count { it.connectionState == ConnectionState.CONNECTED }
-
-    fun clearStatus() { _statusMessage.value = "" }
 
     fun cleanup() {
         stopScan()
