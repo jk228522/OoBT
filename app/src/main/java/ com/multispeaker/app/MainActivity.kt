@@ -84,7 +84,6 @@ fun MultiSpeakerScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(20.dp)
-                .systemBarsPadding()
         ) {
             // ===== HEADER =====
             Row(
@@ -147,7 +146,7 @@ fun MultiSpeakerScreen(
                 )
             ) {
                 Text(
-                    text = if (isScanning) "⏹  Stop Scan" else "🔍  Scan for Devices",
+                    text = if (isScanning) "Stop Scan" else "Scan for Devices",
                     fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = Color(0xFF05070F)
@@ -257,7 +256,6 @@ fun DeviceCard(
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    // Type tag
                     val (tagText, tagColor) = when (device.type) {
                         DeviceType.LE_AUDIO -> "LE Audio" to Color(0xFF10B981)
                         DeviceType.A2DP_CLASSIC -> "A2DP" to Color(0xFF22D3EE)
@@ -275,6 +273,51 @@ fun DeviceCard(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                if (isConnected) {
+                    Button(
+                        onClick = onDisconnect,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0x33EF4444)
+                        )
+                    ) {
+                        Text("Disconnect", color = Color(0xFFEF4444), fontSize = 12.sp)
+                    }
+                } else {
+                    Button(
+                        onClick = onConnect,
+                        enabled = !isConnecting,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF22D3EE)
+                        )
+                    ) {
+                        Text(
+                            text = if (isConnecting) "Connecting..." else "Connect",
+                            color = Color(0xFF05070F),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun Tag(text: String, color: Color) {
+    Box(
+        modifier = Modifier
+            .background(color = color.copy(alpha = 0.15f), shape = RoundedCornerShape(6.dp))
+            .border(width = 1.dp, color = color.copy(alpha = 0.4f), shape = RoundedCornerShape(6.dp))
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+    ) {
+        Text(text = text, fontSize = 10.sp, color = color, fontWeight = FontWeight.SemiBold)
+    }
+}   modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End
             ) {
                 if (isConnected) {
