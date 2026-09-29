@@ -3,8 +3,8 @@ package com.multispeaker.app.bluetooth
 import android.bluetooth.BluetoothDevice
 
 enum class DeviceType {
-    LE_AUDIO,       // Modern LE Audio speaker (LC3)
-    A2DP_CLASSIC,   // Legacy speaker (SBC/AAC/aptX)
+    LE_AUDIO,
+    A2DP_CLASSIC,
     UNKNOWN
 }
 
