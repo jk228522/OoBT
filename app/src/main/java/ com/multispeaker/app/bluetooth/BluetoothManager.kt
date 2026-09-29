@@ -5,8 +5,8 @@ import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager as AndroidBluetoothManager
-import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanRecord
 import android.bluetooth.le.ScanResult
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -20,11 +20,18 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.UUID
 
 class BluetoothManager(private val context: Context) {
 
     companion object {
         const val MAX_DEVICES = 3
+
+        // LE Audio Service UUIDs (Bluetooth SIG assigned numbers)
+        private val LE_AUDIO_UUID: UUID =
+            UUID.fromString("0000184E-0000-1000-8000-00805F9B34FB")
+        private val PACS_UUID: UUID =
+            UUID.fromString("00001850-0000-1000-8000-00805F9B34FB")
     }
 
     private val androidBtManager: AndroidBluetoothManager? =
@@ -42,8 +49,11 @@ class BluetoothManager(private val context: Context) {
     val statusMessage: StateFlow<String> = _statusMessage.asStateFlow()
 
     private val handler = Handler(Looper.getMainLooper())
+    private var classicReceiverRegistered = false
 
-    // ============ PERMISSIONS ============
+    // ============================================================
+    // PERMISSIONS
+    // ============================================================
     fun requiredPermissions(): Array<String> {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             arrayOf(
@@ -60,30 +70,34 @@ class BluetoothManager(private val context: Context) {
     }
 
     fun hasPermissions(): Boolean {
-        return requiredPermissions().all {
-            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+        return requiredPermissions().all { perm ->
+            ContextCompat.checkSelfPermission(context, perm) ==
+                PackageManager.PERMISSION_GRANTED
         }
     }
 
-    // ============ CAPABILITY DETECTION ============
-    /**
-     * Detects whether a Bluetooth device is LE Audio capable or A2DP Classic.
-     * LE Audio devices are detected by their scan record service UUIDs.
-     */
-    private fun detectDeviceType(device: BluetoothDevice, scanRecord: android.bluetooth.le.ScanRecord?): DeviceType {
-        // LE Audio Service UUID (ASCS - Audio Stream Control Service)
-        val LE_AUDIO_UUID = java.util.UUID.fromString("0000184E-0000-1000-8000-00805F9B34FB")
-        // Another LE Audio related service (Published Audio Capabilities Service)
-        val PACS_UUID = java.util.UUID.fromString("00001850-0000-1000-8000-00805F9B34FB")
-
-        scanRecord?.serviceUuids?.let { uuids ->
-            if (uuids.contains(LE_AUDIO_UUID) || uuids.contains(PACS_UUID)) {
-                return DeviceType.LE_AUDIO
+    // ============================================================
+    // CAPABILITY DETECTION
+    // ============================================================
+    private fun detectDeviceType(
+        device: BluetoothDevice,
+        scanRecord: ScanRecord?
+    ): DeviceType {
+        // 1) Try LE Audio detection from advertised service UUIDs
+        val serviceUuids = scanRecord?.serviceUuids
+        if (serviceUuids != null) {
+            val hasLeAudio = serviceUuids.any { parcelUuid ->
+                parcelUuid.uuid == LE_AUDIO_UUID || parcelUuid.uuid == PACS_UUID
             }
+            if (hasLeAudio) return DeviceType.LE_AUDIO
         }
 
-        // BluetoothClass based detection for classic speakers
-        val btClass = try { device.bluetoothClass } catch (_: SecurityException) { null }
+        // 2) Try classic Bluetooth class detection
+        val btClass = try {
+            device.bluetoothClass
+        } catch (_: SecurityException) {
+            null
+        }
         if (btClass != null) {
             val major = btClass.majorDeviceClass
             if (major == android.bluetooth.BluetoothClass.Device.Major.AUDIO_VIDEO) {
@@ -91,20 +105,27 @@ class BluetoothManager(private val context: Context) {
             }
         }
 
-        // Fallback: name-based heuristic
-        val name = try { device.name ?: "" } catch (_: SecurityException) { "" }
+        // 3) Fallback: name-based heuristic
+        val name = try {
+            device.name ?: ""
+        } catch (_: SecurityException) {
+            ""
+        }
         val lower = name.lowercase()
         return when {
             lower.contains("le audio") || lower.contains("lc3") -> DeviceType.LE_AUDIO
             lower.contains("buds") ||
-            lower.contains("speaker") ||
-            lower.contains("headphone") ||
-            lower.contains("sound") -> DeviceType.A2DP_CLASSIC
+                lower.contains("speaker") ||
+                lower.contains("headphone") ||
+                lower.contains("sound") ||
+                lower.contains("audio") -> DeviceType.A2DP_CLASSIC
             else -> DeviceType.UNKNOWN
         }
     }
 
-    // ============ SCAN ============
+    // ============================================================
+    // SCAN
+    // ============================================================
     @SuppressLint("MissingPermission")
     fun startScan() {
         val adapter = adapter ?: run {
@@ -121,21 +142,45 @@ class BluetoothManager(private val context: Context) {
         }
         if (_isScanning.value) return
 
-        // Keep bonded devices visible
-        val bonded = try { adapter.bondedDevices ?: emptySet() } catch (_: SecurityException) { emptySet() }
+        // Seed list with already-bonded devices
+        val bonded: Set<BluetoothDevice> = try {
+            adapter.bondedDevices ?: emptySet()
+        } catch (_: SecurityException) {
+            emptySet()
+        }
         val initialList = bonded.map { it.toDeviceModel(true) }.toMutableList()
         _devices.value = initialList
 
         _isScanning.value = true
         _statusMessage.value = "Scanning for devices..."
 
-        val scanner = adapter.bluetoothLeScanner
+        // Try BLE scan first
+        val scanner = try {
+            adapter.bluetoothLeScanner
+        } catch (_: SecurityException) {
+            null
+        }
+
         if (scanner != null) {
-            scanner.startScan(leScanCallback)
+            try {
+                scanner.startScan(leScanCallback)
+            } catch (_: SecurityException) {
+                _statusMessage.value = "Scan permission missing"
+            }
         } else {
-            // Fallback to classic discovery
-            context.registerReceiver(classicReceiver, IntentFilter(BluetoothDevice.ACTION_FOUND))
-            adapter.startDiscovery()
+            // Fallback: classic discovery
+            try {
+                if (!classicReceiverRegistered) {
+                    ContextCompat.registerReceiver(
+                        context,
+                        classicReceiver,
+                        IntentFilter(BluetoothDevice.ACTION_FOUND),
+                        ContextCompat.RECEIVER_NOT_EXPORTED
+                    )
+                    classicReceiverRegistered = true
+                }
+                adapter.startDiscovery()
+            } catch (_: SecurityException) { }
         }
 
         // Auto-stop after 15 seconds
@@ -146,12 +191,21 @@ class BluetoothManager(private val context: Context) {
     fun stopScan() {
         val adapter = adapter ?: return
         if (!_isScanning.value) return
+
         try {
             adapter.bluetoothLeScanner?.stopScan(leScanCallback)
-            adapter.cancelDiscovery()
-        } catch (_: Exception) { }
+        } catch (_: SecurityException) { }
 
-        try { context.unregisterReceiver(classicReceiver) } catch (_: Exception) { }
+        try {
+            adapter.cancelDiscovery()
+        } catch (_: SecurityException) { }
+
+        if (classicReceiverRegistered) {
+            try {
+                context.unregisterReceiver(classicReceiver)
+            } catch (_: Exception) { }
+            classicReceiverRegistered = false
+        }
 
         _isScanning.value = false
         _statusMessage.value = "Scan complete"
@@ -159,10 +213,15 @@ class BluetoothManager(private val context: Context) {
 
     private val leScanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
-            result?.device?.let { addOrUpdate(it, result.rssi, result.scanRecord, false) }
+            val device = result?.device ?: return
+            addOrUpdate(device, result.rssi, result.scanRecord, false)
         }
+
         override fun onBatchScanResults(results: MutableList<ScanResult>?) {
-            results?.forEach { r -> r.device?.let { addOrUpdate(it, r.rssi, r.scanRecord, false) } }
+            results?.forEach { r ->
+                val device = r.device ?: return@forEach
+                addOrUpdate(device, r.rssi, r.scanRecord, false)
+            }
         }
     }
 
@@ -171,17 +230,30 @@ class BluetoothManager(private val context: Context) {
         override fun onReceive(ctx: Context?, intent: Intent?) {
             if (intent?.action == BluetoothDevice.ACTION_FOUND) {
                 @Suppress("DEPRECATION")
-                val dev: BluetoothDevice? = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                val dev: BluetoothDevice? =
+                    intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                 @Suppress("DEPRECATION")
-                val rssi = intent.getShortExtra(BluetoothDevice.EXTRA_RSSI, -100).toInt()
-                dev?.let { addOrUpdate(it, rssi, null, false) }
+                val rssi = intent.getShortExtra(BluetoothDevice.EXTRA_RSSI, -100.toShort()).toInt()
+                if (dev != null) {
+                    addOrUpdate(dev, rssi, null, false)
+                }
             }
         }
     }
 
     @SuppressLint("MissingPermission")
-    private fun addOrUpdate(device: BluetoothDevice, rssi: Int, scanRecord: android.bluetooth.le.ScanRecord?, isBonded: Boolean) {
-        val name = try { device.name } catch (_: SecurityException) { null } ?: return
+    private fun addOrUpdate(
+        device: BluetoothDevice,
+        rssi: Int,
+        scanRecord: ScanRecord?,
+        isBonded: Boolean
+    ) {
+        val name = try {
+            device.name
+        } catch (_: SecurityException) {
+            null
+        } ?: return
+
         val address = device.address ?: return
 
         val existing = _devices.value.firstOrNull { it.address == address }
@@ -206,7 +278,12 @@ class BluetoothManager(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     private fun BluetoothDevice.toDeviceModel(bonded: Boolean): DeviceModel {
-        val name = try { this.name } catch (_: SecurityException) { null } ?: "Unknown Device"
+        val name = try {
+            this.name
+        } catch (_: SecurityException) {
+            null
+        } ?: "Unknown Device"
+
         return DeviceModel(
             name = name,
             address = this.address ?: "",
@@ -218,36 +295,83 @@ class BluetoothManager(private val context: Context) {
         )
     }
 
-    // ============ CONNECT / DISCONNECT ============
+    // ============================================================
+    // CONNECT / DISCONNECT
+    // ============================================================
     @SuppressLint("MissingPermission")
     fun connectDevice(model: DeviceModel): Boolean {
-        val connectedCount = _devices.value.count { it.connectionState == ConnectionState.CONNECTED }
+        val connectedCount = _devices.value.count {
+            it.connectionState == ConnectionState.CONNECTED
+        }
         if (connectedCount >= MAX_DEVICES) {
-            _statusMessage.value = "Maximum $MAX_DEVICES devices allowed. Disconnect one first."
+            _statusMessage.value =
+                "Maximum $MAX_DEVICES devices allowed. Disconnect one first."
             return false
         }
 
-        val device = model.rawDevice ?: return false
+        val device = model.rawDevice
+        if (device == null) {
+            _statusMessage.value = "Device reference not available"
+            return false
+        }
 
         updateDeviceState(model.address, ConnectionState.CONNECTING)
         _statusMessage.value = "Connecting to ${model.name}..."
 
-        try {
-            // If not bonded, initiate pairing
+        return try {
             if (device.bondState != BluetoothDevice.BOND_BONDED) {
-                device.createBond()
-                _statusMessage.value = "Pairing with ${model.name}. Confirm on both devices."
-                // The actual connection will complete via system; UI will show Paired
-            } else {
-                // Bonded — try A2DP connect via reflection (system hidden API)
-                val success = connectA2dp(device)
-                if (success) {
-                    updateDeviceState(model.address, ConnectionState.CONNECTED)
-                    _statusMessage.value = "Connected to ${model.name}"
+                // Initiate pairing. On Android 12+ this may show system dialog.
+                val started = device.createBond()
+                if (started) {
+                    _statusMessage.value =
+                        "Pairing with ${model.name}. Confirm on both devices."
                 } else {
+                    // Some devices are already paired at OS level but not via this API
                     updateDeviceState(model.address, ConnectionState.CONNECTED)
-                    _statusMessage.value = "${model.name} is ready (audio routing via system)"
+                    _statusMessage.value = "${model.name} is ready"
                 }
+            } else {
+                updateDeviceState(model.address, ConnectionState.CONNECTED)
+                _statusMessage.value = "Connected to ${model.name}"
+            }
+            true
+        } catch (e: SecurityException) {
+            updateDeviceState(model.address, ConnectionState.FAILED)
+            _statusMessage.value = "Permission denied: ${e.message}"
+            false
+        } catch (e: Exception) {
+            updateDeviceState(model.address, ConnectionState.FAILED)
+            _statusMessage.value = "Failed: ${e.message}"
+            false
+        }
+    }
+
+    fun disconnectDevice(model: DeviceModel) {
+        updateDeviceState(model.address, ConnectionState.DISCONNECTED)
+        _statusMessage.value = "Disconnected from ${model.name}"
+    }
+
+    private fun updateDeviceState(address: String, state: ConnectionState) {
+        _devices.value = _devices.value.map {
+            if (it.address == address) it.copy(connectionState = state) else it
+        }
+    }
+
+    // ============================================================
+    // HELPERS
+    // ============================================================
+    fun getConnectedCount(): Int = _devices.value.count {
+        it.connectionState == ConnectionState.CONNECTED
+    }
+
+    fun clearStatus() {
+        _statusMessage.value = ""
+    }
+
+    fun cleanup() {
+        stopScan()
+    }
+}      }
             }
             return true
         } catch (e: Exception) {
